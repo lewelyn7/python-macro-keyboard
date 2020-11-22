@@ -4,12 +4,82 @@ import os
 import sys
 from serial import Serial, SerialException
 from evdev import InputDevice, categorize, ecodes
+import queue
+import threading
+
+class ArduinoModule:
+    def __init__(self, enable=True):
+        self.enable = enable
+        self.connected = False
+        self.write_queue = queue.Queue()
+        self.send_executor_thread = threading.Thread(target=self.send_executor, daemon=True) 
+        self.send_q_empty_cond = threading.Condition()
+        self.send_executor_thread.start()
+        self.PRECOMMAND = 0
+        self.DESK_READY = 1
+        self.POSTCOMMAND = 3
+        self.MAX_SEND_ATTEMPTS = 15
+
+        if(self.enable):
+            self.connect()
+    def connect(self):
+        self.connected = True
+        try:
+            self.arduino = Serial("/dev/ttyUSB0", 115200, timeout=1)
+        except SerialException:
+            try:
+                self.arduino = Serial("/dev/ttyUSB1", 115200, timeout=1)
+            except SerialException:
+                print("serial exception")
+                self.connected = False
+    def send_str(self, message):
+        if not self.enable:
+            return False
+        if not self.connected:
+            self.connect()
+            if(not self.connected):
+                return False
+        self.send_q_empty_cond.acquire()
+        self.write_queue.put(message)
+        self.send_q_empty_cond.notify()
+        self.send_q_empty_cond.release()
 
 
-#presetet strings to be sent by serial
-mute = "m".encode("UTF-8")
-unmute = "u".encode("UTF-8")
-buzzer = "b".encode("UTF-8")
+    def send_executor(self):
+        while(True):
+            self.send_q_empty_cond.acquire()
+            self.send_q_empty_cond.wait_for(lambda : (not self.write_queue.empty()) and self.enable and self.connected)
+            message = self.queue.get()
+            self.send_q_empty_cond.release()
+            print("DEUBG")
+            
+            desk_ready = False
+            send_attempts = 0
+            while(not desk_ready):
+                if send_attempts == self.MAX_SEND_ATTEMPTS:
+                    break
+                arduino.write(self.PRECOMMAND)
+                if arduino.get() == self.DESK_READY:
+                    desk_ready = True
+                else:
+                    send_attempts += 1
+            if send_attempts != self.MAX_SEND_ATTEMPTS:
+                arduino.write(message.encode("UTF-8"))
+                arduino.write(POSTCOMMAND)
+                
+            else:
+                pass
+                #transmission error TODO
+
+
+
+class DeskHandler:
+    def __init__(self):
+        self.arduino = ArduinoModule()
+        self.mute = lambda : self.arduino.send_str("m")
+        self.unmute = lambda : self.arduino.send_str("u")
+        self.notify = lambda : self.arduino.send_str("n")
+
 
 class AbstractParser:
     def __init__(self):
@@ -53,10 +123,11 @@ class DigikamParser(AbstractParser):
 
 
 class Parser(AbstractParser):
-    def __init__(self):
+    def __init__(self, ardu):
         super().__init__()
-
+        
         # initial state
+        self.desk = DeskHandler()
         self.muted = True
         self.unmuted = False
         self.headphones = False
@@ -75,8 +146,7 @@ class Parser(AbstractParser):
         self.actions_dict['KEY_KP4'] = lambda key : os.system('xdotool key XF86AudioLowerVolume')
         self.actions_dict['KEY_KP5'] = lambda key : os.system('xdotool key XF86AudioMute')
         self.actions_dict['KEY_KP1'] = lambda key : (
-            arduino.write(buzzer) if self.backspace_pressed 
-            else os.system('xdotool key XF86AudioPrev')
+            os.system('xdotool key XF86AudioPrev')
             )
         self.actions_dict['KEY_KP2'] = lambda key : os.system('xdotool key XF86AudioPlay')
         self.actions_dict['KEY_KP3'] = lambda key : os.system('xdotool key XF86AudioNext')
@@ -84,17 +154,17 @@ class Parser(AbstractParser):
         def key_kp0(key):
               os.system('xdotool key alt alt+shift+Home')
               if self.muted:
-#                  arduino.write(unmute)
+                  self.desk.unmute()
                   self.unmuted = True
                   self.muted = False
-              elif unmuted:
-#                  arduino.write(mute)
+              elif self.unmuted:
+                  self.desk.mute()
                   self.unmuted = False
                   self.muted = True
         self.actions_dict['KEY_KP0'] = key_kp0
         
         def kp_dot(key):
-            print(headphones)
+            print(self.headphones)
             if self.headphones == 1:
                 os.system('/home/karolh/Desktop/skrypty/makra/movesinks.sh ' + sink1)
                 self.headphones = 0
@@ -116,7 +186,7 @@ class Parser(AbstractParser):
               if self.backspace_pressed:
                   os.system("xdotool key Super_L+Shift+Left")
               else:
-                  os.system("xdotool key ctrl+Super_L+F4")
+                  os.system("xdotool key ctrl+Super_L+F4")#TODO cant be F4 beacuse firefox close tab shortcut also is ctrl+F4
         self.actions_dict['KEY_KP7'] = kp7 
         
         def kp8(key):
@@ -135,14 +205,14 @@ class Parser(AbstractParser):
         
         def key_tab(key):
               if self.backspace_pressed:
-                  os.system("xdotool key Super_L+Shift+Up")
+                  os.system("xdotool key Super_L+Alt+F10")
               else:
                   os.system("xdotool key ctrl+Super_L+F1")
         self.actions_dict['KEY_TAB'] = key_tab
         
         def kpsplash(key):
               if self.backspace_pressed:
-                  os.system("xdotool key Super_L+Shift+Right")
+                  os.system("xdotool key Super_L+Alt+F9")
               else:
                   os.system("xdotool key ctrl+Super_L+F2")
         self.actions_dict['KEY_KPSLASH'] = kpsplash
@@ -156,116 +226,22 @@ class Parser(AbstractParser):
 
 
         
-
-try:
-    arduino = Serial("/dev/ttyUSB0", 9600, timeout=1)
-except SerialException:
-    try:
-        arduino = Serial("/dev/ttyUSB1", 9600, timeout=1)
-    except SerialException:
-        print("serial exception")
-        muted = False
-        unmuted = False
+def __tests():
+    desk = DeskHandler()
+    desk.mute()
+    desk.unmute()
+    desk.notify()
 
 
-
+# __tests()
 dev = InputDevice(sys.argv[1])
 sink1 = sys.argv[2]
 sink2 = sys.argv[3]
-#dev = InputDevice('/dev/input/event27')
 dev.grab()
 
-parser = DigikamParser()
+parser = Parser(ardu)
 for event in dev.read_loop():
   if event.type == ecodes.EV_KEY:
       key = categorize(event)
       parser.parse(key)
 
-
-
-# for event in dev.read_loop():
-#   if event.type == ecodes.EV_KEY:
-#       key = categorize(event)
-#       if key.keycode == "KEY_BACKSPACE":
-#           backspace_pressed = True if key.keystate == key.key_down else False
-#       if key.keystate == key.key_down:
-#           print(key.keycode)
-#           if key.keycode == 'KEY_KP6':
-#               os.system('xdotool key XF86AudioRaiseVolume')
-#           if key.keycode == 'KEY_KP4':
-#               os.system('xdotool key XF86AudioLowerVolume')
-#           if key.keycode == 'KEY_KP5':
-#               os.system('xdotool key XF86AudioMute')
-#           if key.keycode == 'KEY_KP1':
-#               if backspace_pressed:
-#                   arduino.write(buzzer)
-#               else:
-#                   os.system('xdotool key XF86AudioPrev')
-#           if key.keycode == 'KEY_KP2':
-#               os.system('xdotool key XF86AudioPlay')
-#           if key.keycode == 'KEY_KP3':
-#               os.system('xdotool key XF86AudioNext')
-#           if key.keycode == 'KEY_KP0':
-#               os.system('xdotool key alt alt+shift+Home')
-#               if muted:
-#                   arduino.write(unmute)
-#                   unmuted = True
-#                   muted = False
-#               elif unmuted:
-#                   arduino.write(mute)
-#                   unmuted = False
-#                   muted = True
-#           if key.keycode == 'KEY_KPDOT':
-#               print(headphones)
-#               if headphones == 1:
-#                   os.system('/home/karolh/Desktop/skrypty/makra/movesinks.sh ' + sink1)
-#                   headphones = 0
-#               else:
-#                   os.system('/home/karolh/Desktop/skrypty/makra/movesinks.sh ' + sink2)
-#                   headphones = 1
-#           if key.keycode == 'KEY_BACKSPACE':
-#               pass
-#           if key.keycode == 'KEY_KPMINUS':
-#               if backspace_pressed:
-#                   os.system("xdotool key Super_L+Right")
-#               else:
-#                   pass
-#           if key.keycode == 'KEY_KPPLUS':
-#               os.system("xdotool key Super_L+3")
-#           if key.keycode == 'KEY_KP7':
-#               if backspace_pressed:
-#                   os.system("xdotool key Super_L+Shift+Left")
-#               else:
-#                   os.system("xdotool key ctrl+Super_L+F4")
-#           if key.keycode == 'KEY_KP8':
-#               if backspace_pressed:
-#                   os.system("xdotool key Super_L+Shift+Down")
-#               else:
-#                   os.system("xdotool key ctrl+Super_L+F5")
-#           if key.keycode == 'KEY_KP9':
-#               if backspace_pressed:
-#                   os.system("xdotool key Super_L+Left")
-#               else:
-#                   os.system("xdotool key ctrl+Super_L+F6")
-#           if key.keycode == 'KEY_TAB':
-#               if backspace_pressed:
-#                   os.system("xdotool key Super_L+Shift+Up")
-#               else:
-#                   os.system("xdotool key ctrl+Super_L+F1")
-#           if key.keycode == 'KEY_KPSLASH':
-#               if backspace_pressed:
-#                   os.system("xdotool key Super_L+Shift+Right")
-#               else:
-#                   os.system("xdotool key ctrl+Super_L+F2")
-#           if key.keycode == 'KEY_KPASTERISK':
-#               if backspace_pressed:
-#                   os.system("xdotool key Super_L+w")
-#               else:
-#                   os.system("xdotool key ctrl+Super_L+F3")
-#              # if windows_max == 0:
-#              #     os.system("xdotool key Super_L+Down")
-#              #     windows_max = 1
-#              # else:
-#              #     os.system("xdotool key Super_L+Up")
-#              #     windows_max = 0
-#              #
