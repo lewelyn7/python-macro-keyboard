@@ -26,6 +26,7 @@ class ArduinoModule:
         self.connected = True
         try:
             self.arduino = Serial("/dev/ttyUSB0", 115200, timeout=1)
+            print("Arduino connected")
         except SerialException:
             try:
                 self.arduino = Serial("/dev/ttyUSB1", 115200, timeout=1)
@@ -33,6 +34,7 @@ class ArduinoModule:
                 print("serial exception")
                 self.connected = False
     def send_str(self, message):
+        print("sending " + message)
         if not self.enable:
             return False
         if not self.connected:
@@ -49,36 +51,39 @@ class ArduinoModule:
         while(True):
             self.send_q_empty_cond.acquire()
             self.send_q_empty_cond.wait_for(lambda : (not self.write_queue.empty()) and self.enable and self.connected)
-            message = self.queue.get()
+            message = self.write_queue.get()
             self.send_q_empty_cond.release()
-            print("DEUBG")
-            
-            desk_ready = False
-            send_attempts = 0
-            while(not desk_ready):
-                if send_attempts == self.MAX_SEND_ATTEMPTS:
-                    break
-                arduino.write(self.PRECOMMAND)
-                if arduino.get() == self.DESK_READY:
-                    desk_ready = True
-                else:
-                    send_attempts += 1
-            if send_attempts != self.MAX_SEND_ATTEMPTS:
-                arduino.write(message.encode("UTF-8"))
-                arduino.write(POSTCOMMAND)
+
+            #TODO
+            print("writing " + message)
+            self.arduino.write(message.encode("UTF-8"))
+
+            # desk_ready = False
+            # send_attempts = 0
+            # while(not desk_ready):
+            #     if send_attempts == self.MAX_SEND_ATTEMPTS:
+            #         break
+            #     self.arduino.write(self.PRECOMMAND)
+            #     if self.arduino.read() == self.DESK_READY:
+            #         desk_ready = True
+            #     else:
+            #         send_attempts += 1
+            # if send_attempts != self.MAX_SEND_ATTEMPTS:
+            #     self.arduino.write(message.encode("UTF-8"))
+            #     self.arduino.write(POSTCOMMAND)
                 
-            else:
-                pass
-                #transmission error TODO
+            # else:
+            #     pass
+            #     #transmission error TODO
 
 
-
+#TODO add logging module
 class DeskHandler:
     def __init__(self):
         self.arduino = ArduinoModule()
-        self.mute = lambda : self.arduino.send_str("m")
-        self.unmute = lambda : self.arduino.send_str("u")
-        self.notify = lambda : self.arduino.send_str("n")
+        self.mute = lambda : self.arduino.send_str("m\n")
+        self.unmute = lambda : self.arduino.send_str("u\n")
+        self.notify = lambda : self.arduino.send_str("n\n")
 
 
 class AbstractParser:
@@ -239,7 +244,7 @@ sink1 = sys.argv[2]
 sink2 = sys.argv[3]
 dev.grab()
 
-parser = Parser(ardu)
+parser = Parser(True)
 for event in dev.read_loop():
   if event.type == ecodes.EV_KEY:
       key = categorize(event)
