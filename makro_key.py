@@ -5,10 +5,14 @@ import sys
 from serial import Serial, SerialException
 from evdev import InputDevice, categorize, ecodes
 import queue
+import logging
 import threading
+logging.basicConfig()
 
 class ArduinoModule:
     def __init__(self, enable=True):
+        self.logger = logging.getLogger(__name__ + ".ArduinoModule")
+        self.logger.setLevel(logging.DEBUG)
         self.enable = enable
         self.connected = False
         self.write_queue = queue.Queue()
@@ -23,18 +27,20 @@ class ArduinoModule:
         if(self.enable):
             self.connect()
     def connect(self):
-        self.connected = True
         try:
             self.arduino = Serial("/dev/ttyUSB0", 115200, timeout=1)
-            print("Arduino connected")
+            self.logger.info("Arduino connected")
+            self.connected = True
         except SerialException:
             try:
                 self.arduino = Serial("/dev/ttyUSB1", 115200, timeout=1)
+                self.logger.info("Arduino connected")
+                self.connected = True
             except SerialException:
-                print("serial exception")
+                self.logger.warn("serial exception")
                 self.connected = False
     def send_str(self, message):
-        print("sending " + message)
+        self.logger.info("sending " + message)
         if not self.enable:
             return False
         if not self.connected:
@@ -53,28 +59,37 @@ class ArduinoModule:
             self.send_q_empty_cond.wait_for(lambda : (not self.write_queue.empty()) and self.enable and self.connected)
             message = self.write_queue.get()
             self.send_q_empty_cond.release()
+            
+            send_attempts = 0
+            for i in range(self.MAX_SEND_ATTEMPTS):
+                try:
+                    self.logger.info("writing " + message)
+                    self.arduino.write(message.encode("UTF-8"))
+                    break
+                except IOError:
+                    self.logger.info("arduino write error")
+                    self.connect()
+                #TODO
 
-            #TODO
-            print("writing " + message)
-            self.arduino.write(message.encode("UTF-8"))
 
-            # desk_ready = False
-            # send_attempts = 0
-            # while(not desk_ready):
-            #     if send_attempts == self.MAX_SEND_ATTEMPTS:
-            #         break
-            #     self.arduino.write(self.PRECOMMAND)
-            #     if self.arduino.read() == self.DESK_READY:
-            #         desk_ready = True
-            #     else:
-            #         send_attempts += 1
-            # if send_attempts != self.MAX_SEND_ATTEMPTS:
-            #     self.arduino.write(message.encode("UTF-8"))
-            #     self.arduino.write(POSTCOMMAND)
-                
-            # else:
-            #     pass
-            #     #transmission error TODO
+                # desk_ready = False
+                # send_attempts = 0
+                # while(not desk_ready):
+                #     if send_attempts == self.MAX_SEND_ATTEMPTS:
+                #         break
+                #     self.arduino.write(self.PRECOMMAND)
+                #     if self.arduino.read() == self.DESK_READY:
+                #         desk_ready = True
+                #     else:
+                #         send_attempts += 1
+                # if send_attempts != self.MAX_SEND_ATTEMPTS:
+                #     self.arduino.write(message.encode("UTF-8"))
+                #     self.arduino.write(POSTCOMMAND)
+                    
+                # else:
+                #     pass
+                #     #transmission error TODO
+
 
 
 #TODO add logging module
@@ -89,10 +104,10 @@ class DeskHandler:
 class AbstractParser:
     def __init__(self):
         self.actions_dict = {}        
-
+        self.logger = logging.getLogger(__name__ + ".Parser")
     def parse(self, key):
-        print(key.keycode)
-        print(key.key_hold == key.keystate)
+        self.logger.info(key.keycode)
+        self.logger.debug(key.key_hold == key.keystate)
         if key.keycode in self.actions_dict:
             if key.keycode == 'KEY_BACKSPACE':
                 self.actions_dict[key.keycode](key)
