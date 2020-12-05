@@ -7,6 +7,7 @@ from evdev import InputDevice, categorize, ecodes
 import queue
 import logging
 import threading
+import time
 logging.basicConfig()
 
 class ArduinoModule:
@@ -17,12 +18,18 @@ class ArduinoModule:
         self.connected = False
         self.write_queue = queue.Queue()
         self.send_executor_thread = threading.Thread(target=self.send_executor, daemon=True) 
+        self.receiver_thread = threading.Thread(target=self.receive_execute, daemon=True) 
         self.send_q_empty_cond = threading.Condition()
-        self.send_executor_thread.start()
+        self.connected_cond = threading.Condition()
+        self.arduino_lock = threading.Lock()
         self.PRECOMMAND = 0
         self.DESK_READY = 1
         self.POSTCOMMAND = 3
         self.MAX_SEND_ATTEMPTS = 15
+        self.rcv_buffer = []
+
+        self.send_executor_thread.start()
+        self.receiver_thread.start()
 
         if(self.enable):
             self.connect()
@@ -39,6 +46,11 @@ class ArduinoModule:
             except SerialException:
                 self.logger.warn("serial exception")
                 self.connected = False
+        finally:
+            if(self.connected):
+                self.connected_cond.acquire()
+                self.connected_cond.notify_all()
+                self.connected_cond.release()
     def send_str(self, message):
         self.logger.info("sending " + message)
         if not self.enable:
@@ -89,7 +101,21 @@ class ArduinoModule:
                 # else:
                 #     pass
                 #     #transmission error TODO
+    def receive_execute(self):
+        
+        while(True):
+            self.connected_cond.acquire()
+            self.connected_cond.wait_for(lambda : self.connected ==  True)
+            self.connected_cond.release()
+            try:
+                if(self.arduino.inWaiting() > 0):
+                    rcv = self.arduino.readline()
+                    self.logger.debug("READ" + str(rcv))
 
+            except IOError:
+                self.logger.info("arduino read error")
+                self.connect()
+            time.sleep(0.01)  
 
 
 #TODO add logging module
