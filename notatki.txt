@@ -1,0 +1,2 @@
+
+kwriteconfig5 --file powermanagementprofilesrc --group AC --group SuspendSession --key idleTime 2400000
