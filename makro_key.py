@@ -29,7 +29,7 @@ class ArduinoModule:
         self.rcv_buffer = []
 
         self.send_executor_thread.start()
-        self.receiver_thread.start()
+        #self.receiver_thread.start()
 
         if(self.enable):
             self.connect()
@@ -126,6 +126,10 @@ class DeskHandler:
         self.unmute = lambda : self.arduino.send_str("u\n")
         self.notify = lambda : self.arduino.send_str("n\n")
 
+#    def __init__(self):
+#        self.mute = lambda : print("mute")# self.arduino.send_str("m\n")
+#        self.unmute = lambda : print("unmute")#self.arduino.send_str("u\n")
+#        self.notify = lambda : sprint("notify")#elf.arduino.send_str("n\n")
 
 class AbstractParser:
     def __init__(self):
@@ -191,11 +195,24 @@ class Parser(AbstractParser):
         self.actions_dict['KEY_KP6'] = lambda key : os.system('xdotool key XF86AudioRaiseVolume')
         self.actions_dict['KEY_KP4'] = lambda key : os.system('xdotool key XF86AudioLowerVolume')
         self.actions_dict['KEY_KP5'] = lambda key : os.system('xdotool key XF86AudioMute')
-        self.actions_dict['KEY_KP1'] = lambda key : (
-            os.system('xdotool key XF86AudioPrev')
-            )
-        self.actions_dict['KEY_KP2'] = lambda key : os.system('xdotool key XF86AudioPlay')
-        self.actions_dict['KEY_KP3'] = lambda key : os.system('xdotool key XF86AudioNext')
+        def key_kp1(key):
+            if self.backspace_pressed:
+                os.system('kwriteconfig5 --file kscreenlockerrc  --group Daemon  --key Timeout {time};notify-send \"screen locking set to {time} min\"'.format(time=5))
+            else:
+                os.system('xdotool key XF86AudioPrev')
+        self.actions_dict['KEY_KP1'] = key_kp1
+        def key_kp2(key):
+            if self.backspace_pressed:
+                os.system('kwriteconfig5 --file kscreenlockerrc  --group Daemon  --key Timeout {time};notify-send \"screen locking set to {time} min\"'.format(time=10))                
+            else:
+                os.system('xdotool key XF86AudioPlay')
+        self.actions_dict['KEY_KP2'] = key_kp2
+        def key_kp3(key):
+            if self.backspace_pressed:
+                os.system('kwriteconfig5 --file kscreenlockerrc  --group Daemon  --key Timeout {time};notify-send \"screen locking set to {time} min\"'.format(time=15))
+            else:
+                os.system('xdotool key XF86AudioNext')
+        self.actions_dict['KEY_KP3'] = key_kp3
         
         def key_kp0(key):
               os.system('xdotool key alt alt+shift+Home')
@@ -232,7 +249,7 @@ class Parser(AbstractParser):
               if self.backspace_pressed:
                   os.system("xdotool key Super_L+Shift+Left")
               else:
-                  os.system("xdotool key ctrl+Super_L+F4")#TODO cant be F4 beacuse firefox close tab shortcut also is ctrl+F4
+                  os.system("xdotool key ctrl+Super_L+F7")
         self.actions_dict['KEY_KP7'] = kp7 
         
         def kp8(key):

@@ -1,2 +1,3 @@
 
 kwriteconfig5 --file powermanagementprofilesrc --group AC --group SuspendSession --key idleTime 2400000
+kwriteconfig5 --file kscreenlockerrc  --group Daemon  --key Timeout 15
