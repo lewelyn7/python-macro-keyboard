@@ -272,7 +272,7 @@ class Parser(AbstractParser):
               else:
                   os.system("xdotool key ctrl+Super_L+F1")
         self.actions_dict['KEY_TAB'] = key_tab
-        
+        self.actions_dict['KEY_NUMLOCK'] = key_tab
         def kpsplash(key):
               if self.backspace_pressed:
                   os.system("xdotool key Super_L+Alt+F9")
