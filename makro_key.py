@@ -44,7 +44,7 @@ class ArduinoModule:
                 self.logger.info("Arduino connected")
                 self.connected = True
             except SerialException:
-                self.logger.warn("serial exception")
+                self.logger.warning("serial exception")
                 self.connected = False
         finally:
             if(self.connected):
@@ -249,7 +249,7 @@ class Parser(AbstractParser):
               if self.backspace_pressed:
                   os.system("xdotool key Super_L+Shift+Left")
               else:
-                  os.system("xdotool key ctrl+Super_L+F7")
+                  os.system("xdotool key ctrl+Super_L+F8")
         self.actions_dict['KEY_KP7'] = kp7 
         
         def kp8(key):
