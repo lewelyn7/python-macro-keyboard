@@ -125,6 +125,7 @@ class DeskHandler:
         self.mute = lambda : self.arduino.send_str("m\n")
         self.unmute = lambda : self.arduino.send_str("u\n")
         self.notify = lambda : self.arduino.send_str("n\n")
+        self.mute_discord = lambda : self.arduino.send_str("d\n")
 
 #    def __init__(self):
 #        self.mute = lambda : print("mute")# self.arduino.send_str("m\n")
@@ -135,7 +136,9 @@ class AbstractParser:
     def __init__(self):
         self.actions_dict = {}        
         self.logger = logging.getLogger(__name__ + ".Parser")
+        # self.logger.setLevel(logging.DEBUG)
     def parse(self, key):
+        self.logger.info("\n")
         self.logger.info(key.keycode)
         self.logger.debug(key.key_hold == key.keystate)
         if key.keycode in self.actions_dict:
@@ -180,11 +183,23 @@ class Parser(AbstractParser):
         self.desk = DeskHandler()
         self.muted = True
         self.unmuted = False
+        self.discord_muted = True
         self.headphones = False
         self.windows_max = False
         self.backspace_pressed = False
 
 
+        #get microphone state
+        captureMicStr = os.popen('amixer | grep "Capture.*\[off\]"').read()
+        if(captureMicStr == ''):
+            self.desk.unmute()
+            self.unmuted = True
+            self.muted = False            
+        else:
+            self.desk.mute()
+            self.unmuted = False
+            self.muted = True            
+        
         def key_backspace(key):
             if key.keystate == key.key_hold or key.keystate == key.key_down:
                 self.backspace_pressed = True
@@ -203,27 +218,53 @@ class Parser(AbstractParser):
         self.actions_dict['KEY_KP1'] = key_kp1
         def key_kp2(key):
             if self.backspace_pressed:
-                os.system('kwriteconfig5 --file kscreenlockerrc  --group Daemon  --key Timeout {time};notify-send \"screen locking set to {time} min\"'.format(time=10))                
+                os.system('kwriteconfig5 --file kscreenlockerrc  --group Daemon  --key Timeout {time};notify-send \"screen locking set to {time} min\"'.format(time=15))                
             else:
                 os.system('xdotool key XF86AudioPlay')
         self.actions_dict['KEY_KP2'] = key_kp2
         def key_kp3(key):
             if self.backspace_pressed:
-                os.system('kwriteconfig5 --file kscreenlockerrc  --group Daemon  --key Timeout {time};notify-send \"screen locking set to {time} min\"'.format(time=15))
+                os.system('kwriteconfig5 --file kscreenlockerrc  --group Daemon  --key Timeout {time};notify-send \"screen locking set to {time} min\"'.format(time=25))
             else:
                 os.system('xdotool key XF86AudioNext')
         self.actions_dict['KEY_KP3'] = key_kp3
         
         def key_kp0(key):
-              os.system('xdotool key alt alt+shift+Home')
+            if self.backspace_pressed:
+                if self.discord_muted:
+                    os.system('xdotool key alt alt+shift+Home')
+                    self.desk.unmute()
+                    self.discord_muted = False
+                    if self.muted:
+                        self.desk.unmute()
+                        self.unmuted = True
+                        
+                        self.muted = False
+                        os.system("amixer set Capture cap")                    
+                else:
+                    self.discord_muted = True
+                    os.system('xdotool key alt alt+shift+Home')
+                    self.desk.mute_discord()
+            else:
+              
               if self.muted:
                   self.desk.unmute()
                   self.unmuted = True
+                  
                   self.muted = False
+                  os.system("amixer set Capture cap")
+                  if self.discord_muted:
+                      os.system('xdotool key alt alt+shift+Home')
+                      self.discord_muted = False
               elif self.unmuted:
                   self.desk.mute()
                   self.unmuted = False
+                  
                   self.muted = True
+                  os.system("amixer set Capture nocap")
+                  if not self.discord_muted:
+                      os.system('xdotool key alt alt+shift+Home')
+                      self.discord_muted = True
         self.actions_dict['KEY_KP0'] = key_kp0
         
         def kp_dot(key):
@@ -272,7 +313,7 @@ class Parser(AbstractParser):
               else:
                   os.system("xdotool key ctrl+Super_L+F1")
         self.actions_dict['KEY_TAB'] = key_tab
-        self.actions_dict['KEY_NUMLOCK'] = key_tab
+        # self.actions_dict['KEY_NUMLOCK'] = key_tab for home version
         def kpsplash(key):
               if self.backspace_pressed:
                   os.system("xdotool key Super_L+Alt+F9")
