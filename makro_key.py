@@ -8,20 +8,31 @@ import queue
 import logging
 import threading
 import time
+from datetime import datetime
+from pydbus import SystemBus
+from gi.repository import GLib
+
+
+
 logging.basicConfig()
 
 class ArduinoModule:
     def __init__(self, enable=True):
         self.logger = logging.getLogger(__name__ + ".ArduinoModule")
-        self.logger.setLevel(logging.DEBUG)
+        self.logger.setLevel(logging.INFO)
         self.enable = enable
         self.connected = False
+
         self.write_queue = queue.Queue()
         self.send_executor_thread = threading.Thread(target=self.send_executor, daemon=True) 
-        self.receiver_thread = threading.Thread(target=self.receive_execute, daemon=True) 
+        self.receiver_thread = threading.Thread(target=self.receiver, daemon=True) 
+        # self.receiver_thread = threading.Thread(target=self.receive_executor, daemon=True) 
+        self.receiver_queue = queue.Queue(16)
+        
         self.send_q_empty_cond = threading.Condition()
         self.connected_cond = threading.Condition()
         self.arduino_lock = threading.Lock()
+        
         self.PRECOMMAND = 0
         self.DESK_READY = 1
         self.POSTCOMMAND = 3
@@ -29,18 +40,18 @@ class ArduinoModule:
         self.rcv_buffer = []
 
         self.send_executor_thread.start()
-        #self.receiver_thread.start()
+        self.receiver_thread.start()
 
         if(self.enable):
             self.connect()
     def connect(self):
         try:
-            self.arduino = Serial("/dev/ttyUSB0", 115200, timeout=1)
+            self.arduino = Serial("/dev/ttyUSB0", 115200, timeout=60)
             self.logger.info("Arduino connected")
             self.connected = True
         except SerialException:
             try:
-                self.arduino = Serial("/dev/ttyUSB1", 115200, timeout=1)
+                self.arduino = Serial("/dev/ttyUSB1", 115200, timeout=60)
                 self.logger.info("Arduino connected")
                 self.connected = True
             except SerialException:
@@ -81,51 +92,74 @@ class ArduinoModule:
                 except IOError:
                     self.logger.info("arduino write error")
                     self.connect()
-                #TODO
 
 
-                # desk_ready = False
-                # send_attempts = 0
-                # while(not desk_ready):
-                #     if send_attempts == self.MAX_SEND_ATTEMPTS:
-                #         break
-                #     self.arduino.write(self.PRECOMMAND)
-                #     if self.arduino.read() == self.DESK_READY:
-                #         desk_ready = True
-                #     else:
-                #         send_attempts += 1
-                # if send_attempts != self.MAX_SEND_ATTEMPTS:
-                #     self.arduino.write(message.encode("UTF-8"))
-                #     self.arduino.write(POSTCOMMAND)
-                    
-                # else:
-                #     pass
-                #     #transmission error TODO
-    def receive_execute(self):
+    def receiver(self):
         
         while(True):
             self.connected_cond.acquire()
             self.connected_cond.wait_for(lambda : self.connected ==  True)
             self.connected_cond.release()
             try:
-                if(self.arduino.inWaiting() > 0):
-                    rcv = self.arduino.readline()
-                    self.logger.debug("READ" + str(rcv))
-
-            except IOError:
-                self.logger.info("arduino read error")
+                # if(self.arduino.inWaiting() > 0):
+                rcv = self.arduino.readline(64)
+                self.logger.debug("READ " + str(rcv))
+                str_rcv = rcv.decode("utf-8")
+                self.receiver_queue.put(str_rcv, timeout=3)
+            except (IOError, queue.Full):
+                self.logger.warning("arduino read error")
                 self.connect()
-            time.sleep(0.01)  
+            # time.sleep(0.01)  
 
 
 #TODO add logging module
 class DeskHandler:
     def __init__(self):
+        self.logger = logging.getLogger(__name__ + ".DeskHandler")
+        self.logger.setLevel(logging.WARNING)        
+
         self.arduino = ArduinoModule()
+        self.arduino.send_str("init\n")
         self.mute = lambda : self.arduino.send_str("m\n")
         self.unmute = lambda : self.arduino.send_str("u\n")
         self.notify = lambda : self.arduino.send_str("n\n")
         self.mute_discord = lambda : self.arduino.send_str("d\n")
+        self.callbacks = {}
+
+        self.receiver_thread = threading.Thread(target=self.rcv_actions_handler, daemon=True) 
+        self.receiver_thread.start()
+
+        #TO REFACTOR
+        #TODO
+        loop = GLib.MainLoop()
+        bus = SystemBus()
+        objj = bus.get("org.freedesktop.login1", "/org/freedesktop/login1")
+        objj = objj['org.freedesktop.login1.Manager']
+        def handler(val):
+            if val:
+                #bye bye
+                self.logger.info("bye bye")
+                self.arduino.send_str("tsleep\n")
+            else:
+                #hello
+                self.logger.info("wakeup")
+                self.arduino.send_str("wakeup\n")
+        objj.onPrepareForSleep = handler
+        self.dbus_thread = threading.Thread(target=loop.run, daemon=True) 
+
+        self.dbus_thread.start()
+
+    def define_callback(self, message, foo):
+        callbacks[message] = foo
+
+    def rcv_actions_handler(self):
+        while(True):
+            mess = self.arduino.receiver_queue.get()
+            try:
+                self.callbacks[mess]()
+            except KeyError:
+                self.logger.info("No handler for message %s", mess)
+
 
 #    def __init__(self):
 #        self.mute = lambda : print("mute")# self.arduino.send_str("m\n")
@@ -335,6 +369,7 @@ def __tests():
     desk.mute()
     desk.unmute()
     desk.notify()
+
 
 
 # __tests()
