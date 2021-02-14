@@ -114,27 +114,43 @@ class ArduinoModule:
 
 #TODO add logging module
 class DeskHandler:
+
+
     def __init__(self):
         self.logger = logging.getLogger(__name__ + ".DeskHandler")
         self.logger.setLevel(logging.WARNING)        
 
         self.arduino = ArduinoModule()
         self.arduino.send_str("init\n")
-        self.mute = lambda : self.arduino.send_str("m\n")
-        self.unmute = lambda : self.arduino.send_str("u\n")
-        self.notify = lambda : self.arduino.send_str("n\n")
-        self.mute_discord = lambda : self.arduino.send_str("d\n")
-        self.callbacks = {}
 
+
+        self.rcv_callbacks = {}
         self.receiver_thread = threading.Thread(target=self.rcv_actions_handler, daemon=True) 
         self.receiver_thread.start()
 
-        #TO REFACTOR
-        #TODO
-        loop = GLib.MainLoop()
-        bus = SystemBus()
-        objj = bus.get("org.freedesktop.login1", "/org/freedesktop/login1")
-        objj = objj['org.freedesktop.login1.Manager']
+
+        self.invoker_init()
+        self.dbus_init()
+
+    def invoker_init(self):
+        self.cmds = {}
+
+        def mute():
+            self.arduino.send_str('m\n')
+        self.cmds['mute'] = mute
+
+        def unmute():
+            self.arduino.send_str('u\n')
+        self.cmds['unmute'] = unmute
+
+        def notify():
+            self.arduino.send_str('n\n')
+        self.cmds['notify'] = notify
+
+        def mute_discord():
+            self.arduino.send_str('d\n')
+        self.cmds['mute_discord'] = mute_discord
+    def dbus_init(self):
         def handler(val):
             if val:
                 #bye bye
@@ -144,27 +160,37 @@ class DeskHandler:
                 #hello
                 self.logger.info("wakeup")
                 self.arduino.send_str("wakeup\n")
+
+
+        loop = GLib.MainLoop()
+        bus = SystemBus()
+        objj = bus.get("org.freedesktop.login1", "/org/freedesktop/login1")
+        objj = objj['org.freedesktop.login1.Manager']
         objj.onPrepareForSleep = handler
         self.dbus_thread = threading.Thread(target=loop.run, daemon=True) 
-
         self.dbus_thread.start()
 
     def define_callback(self, message, foo):
-        callbacks[message] = foo
+        self.rcv_callbacks[message] = foo
 
     def rcv_actions_handler(self):
         while(True):
             mess = self.arduino.receiver_queue.get()
             try:
-                self.callbacks[mess]()
+                self.rcv_callbacks[mess]()
             except KeyError:
-                self.logger.info("No handler for message %s", mess)
+                self.logger.warn("No handler for message %s", mess)
 
 
-#    def __init__(self):
-#        self.mute = lambda : print("mute")# self.arduino.send_str("m\n")
-#        self.unmute = lambda : print("unmute")#self.arduino.send_str("u\n")
-#        self.notify = lambda : sprint("notify")#elf.arduino.send_str("n\n")
+    def invoke(self, cmd, payload = None):
+        try:
+            if payload:
+                self.cmds[cmd](payload)
+            else:
+                self.cmds[cmd]()
+        except KeyError:
+            self.logger.warn("there is no such command: %s", cmd)
+
 
 class AbstractParser:
     def __init__(self):
@@ -226,7 +252,7 @@ class Parser(AbstractParser):
         #get microphone state
         captureMicStr = os.popen('amixer | grep "Capture.*\[off\]"').read()
         if(captureMicStr == ''):
-            self.desk.unmute()
+            self.desk.invoke('unmute')
             self.unmuted = True
             self.muted = False            
         else:
@@ -267,10 +293,10 @@ class Parser(AbstractParser):
             if self.backspace_pressed:
                 if self.discord_muted:
                     os.system('xdotool key alt alt+shift+Home')
-                    self.desk.unmute()
+                    self.desk.invoke('unmute')
                     self.discord_muted = False
                     if self.muted:
-                        self.desk.unmute()
+                        self.desk.invoke('unmute')
                         self.unmuted = True
                         
                         self.muted = False
@@ -278,11 +304,11 @@ class Parser(AbstractParser):
                 else:
                     self.discord_muted = True
                     os.system('xdotool key alt alt+shift+Home')
-                    self.desk.mute_discord()
+                    self.desk.invoke('mute_discord')
             else:
               
               if self.muted:
-                  self.desk.unmute()
+                  self.desk.invoke('unmute')
                   self.unmuted = True
                   
                   self.muted = False
@@ -291,7 +317,7 @@ class Parser(AbstractParser):
                       os.system('xdotool key alt alt+shift+Home')
                       self.discord_muted = False
               elif self.unmuted:
-                  self.desk.mute()
+                  self.desk.invoke('mute')
                   self.unmuted = False
                   
                   self.muted = True
@@ -347,7 +373,6 @@ class Parser(AbstractParser):
               else:
                   os.system("xdotool key ctrl+Super_L+F1")
         self.actions_dict['KEY_TAB'] = key_tab
-        # self.actions_dict['KEY_NUMLOCK'] = key_tab for home version
         def kpsplash(key):
               if self.backspace_pressed:
                   os.system("xdotool key Super_L+Alt+F9")
@@ -363,7 +388,12 @@ class Parser(AbstractParser):
         self.actions_dict['KEY_KPASTERISK'] = kpasterisk
 
 
-        
+class HomeParser(Parser):
+    def __init__(self):
+        super().__init__()
+        self.actions_dict['KEY_NUMLOCK'] =  self.actions_dict['KEY_TAB']# key_tab for home version
+
+
 def __tests():
     desk = DeskHandler()
     desk.mute()
