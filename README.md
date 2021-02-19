@@ -3,7 +3,7 @@
 Simple script that can intercept keyboard events and assign them specific actions. Can be used to create macro keyboard from a numeric keypad.
 
 Script is highly customizable and can perform wide variety of actions. In my version I added handling of:
- * Communication with my DIY Arduino desk ambilight controller
+ * Communication with my [DIY Arduino desk ambilight controller](https://github.com/lewelyn7/IOT-desk-controller)
  * Listening for `PrepareToSleep` and `WakeUp` events via KDE D-Bus
  * Control of audio output devices via `amixer`
 
