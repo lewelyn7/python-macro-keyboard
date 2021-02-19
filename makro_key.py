@@ -112,7 +112,6 @@ class ArduinoModule:
             # time.sleep(0.01)  
 
 
-#TODO add logging module
 class DeskHandler:
 
 
@@ -150,6 +149,7 @@ class DeskHandler:
         def mute_discord():
             self.arduino.send_str('d\n')
         self.cmds['mute_discord'] = mute_discord
+
     def dbus_init(self):
         def handler(val):
             if val:
@@ -256,7 +256,7 @@ class Parser(AbstractParser):
             self.unmuted = True
             self.muted = False            
         else:
-            self.desk.mute()
+            self.desk.invoke('mute')
             self.unmuted = False
             self.muted = True            
         
@@ -400,17 +400,17 @@ def __tests():
     desk.unmute()
     desk.notify()
 
+if __name__ == "__main__":
+    
+    dev = InputDevice(sys.argv[1])
+    sink1 = sys.argv[2]
+    sink2 = sys.argv[3]
+    dev.grab()
 
+    parser = Parser(True)
 
-# __tests()
-dev = InputDevice(sys.argv[1])
-sink1 = sys.argv[2]
-sink2 = sys.argv[3]
-dev.grab()
-
-parser = Parser(True)
-for event in dev.read_loop():
-  if event.type == ecodes.EV_KEY:
-      key = categorize(event)
-      parser.parse(key)
+    for event in dev.read_loop():
+        if event.type == ecodes.EV_KEY:
+            key = categorize(event)
+            parser.parse(key)
 
