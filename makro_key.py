@@ -106,7 +106,7 @@ class ArduinoModule:
                 self.logger.debug("READ " + str(rcv))
                 str_rcv = rcv.decode("utf-8")
                 self.receiver_queue.put(str_rcv, timeout=3)
-            except (IOError, queue.Full):
+            except (IOError, queue.Full, UnicodeDecodeError):
                 self.logger.warning("arduino read error")
                 self.connect()
             # time.sleep(0.01)  
@@ -248,6 +248,20 @@ class Parser(AbstractParser):
         self.windows_max = False
         self.backspace_pressed = False
 
+        #get availbile audio outputs
+        sinks = os.popen("pactl list short sinks").read()
+        sinks = sinks.split('\n')
+        sinks = [ids.split() for ids in sinks]
+        headphone_audio_id = 0
+        laptop_audio_id = 0
+        if 'usb' in sinks[0][1]:
+            headphone_audio_id = sinks[0][0]
+            laptop_audio_id = sinks[1][0]
+        else:
+            headphone_audio_id = sinks[1][0]
+            laptop_audio_id = sinks[0][0]
+        logging.debug(f"headphone audio sink {headphone_audio_id}")
+        logging.debug(f"laptop audio sink {laptop_audio_id}")
 
         #get microphone state
         captureMicStr = os.popen('amixer | grep "Capture.*\[off\]"').read()
@@ -327,13 +341,23 @@ class Parser(AbstractParser):
                       self.discord_muted = True
         self.actions_dict['KEY_KP0'] = key_kp0
         
+        def move_audio_sinks(dest_audio_sink):
+            streams = os.popen("pactl list short sink-inputs").read()
+            streams = streams.split('\n')
+            streams = [stream.split() for stream in streams][:-1]
+            streams = filter(lambda s: (s[1] == headphone_audio_id or s[1] == laptop_audio_id), streams)
+            for stream in streams:
+                os.system(f"pactl move-sink-input {stream[0]} {dest_audio_sink}")
+
         def kp_dot(key):
-            print(self.headphones)
+            # print(self.headphones)
             if self.headphones == 1:
-                os.system('/home/karolh/Desktop/skrypty/makra/movesinks.sh ' + sink1)
+                move_audio_sinks(laptop_audio_id)
+                # os.system('/home/karolh/Desktop/skrypty/makra/movesinks.sh ' + sink1)
                 self.headphones = 0
             else:
-                os.system('/home/karolh/Desktop/skrypty/makra/movesinks.sh ' + sink2)
+                move_audio_sinks(headphone_audio_id)
+                # os.system('/home/karolh/Desktop/skrypty/makra/movesinks.sh ' + sink2)
                 self.headphones = 1
         self.actions_dict['KEY_KPDOT'] = kp_dot
         
@@ -390,7 +414,7 @@ class Parser(AbstractParser):
 
 class HomeParser(Parser):
     def __init__(self):
-        super().__init__()
+        super().__init__(True)
         self.actions_dict['KEY_NUMLOCK'] =  self.actions_dict['KEY_TAB']# key_tab for home version
 
 
@@ -407,6 +431,7 @@ if __name__ == "__main__":
     sink2 = sys.argv[3]
     dev.grab()
 
+    #parser = HomeParser()
     parser = Parser(True)
 
     for event in dev.read_loop():
