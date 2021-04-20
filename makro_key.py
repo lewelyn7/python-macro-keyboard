@@ -6,6 +6,7 @@ from serial import Serial, SerialException
 from evdev import InputDevice, categorize, ecodes
 import queue
 import logging
+import logging.config
 import threading
 import time
 from datetime import datetime
@@ -14,12 +15,12 @@ from gi.repository import GLib
 
 
 
-logging.basicConfig()
+
 
 class ArduinoModule:
     def __init__(self, enable=True):
-        self.logger = logging.getLogger(__name__ + ".ArduinoModule")
-        self.logger.setLevel(logging.INFO)
+        self.logger = logging.getLogger(__name__).getChild("arduino_module")
+        self.logger.setLevel(logging.WARNING)
         self.enable = enable
         self.connected = False
 
@@ -45,23 +46,33 @@ class ArduinoModule:
         if(self.enable):
             self.connect()
     def connect(self):
-        try:
-            self.arduino = Serial("/dev/ttyUSB0", 115200, timeout=60)
-            self.logger.info("Arduino connected")
-            self.connected = True
-        except SerialException:
+        self.connected = False
+        attempt_counter = 0
+        while not self.connected:
             try:
-                self.arduino = Serial("/dev/ttyUSB1", 115200, timeout=60)
+                self.arduino = Serial("/dev/ttyUSB0", 115200, timeout=60)
                 self.logger.info("Arduino connected")
                 self.connected = True
             except SerialException:
-                self.logger.warning("serial exception")
-                self.connected = False
-        finally:
-            if(self.connected):
-                self.connected_cond.acquire()
-                self.connected_cond.notify_all()
-                self.connected_cond.release()
+                try:
+                    self.arduino = Serial("/dev/ttyUSB1", 115200, timeout=60)
+                    self.logger.info("Arduino connected")
+                    self.connected = True
+                except SerialException:
+                    self.logger.warning("serial exception")
+                    self.connected = False
+                    self.logger.warning(f"retrying in 3 seconds")
+                    time.sleep(3)
+            except (OSError, FileNotFoundError) as e:
+                self.logger.error(f"OS ERROR {repr(e)}")
+                self.logger.error(f"retrying in 3 seconds")
+                time.sleep(3)
+            finally:
+                attempt_counter += 1
+        if(self.connected):
+            self.connected_cond.acquire()
+            self.connected_cond.notify_all()
+            self.connected_cond.release()
     def send_str(self, message):
         self.logger.info("sending " + message)
         if not self.enable:
@@ -89,7 +100,7 @@ class ArduinoModule:
                     self.logger.info("writing " + message)
                     self.arduino.write(message.encode("UTF-8"))
                     break
-                except IOError:
+                except (IOError, OSError):
                     self.logger.info("arduino write error")
                     self.connect()
 
@@ -106,7 +117,7 @@ class ArduinoModule:
                 self.logger.debug("READ " + str(rcv))
                 str_rcv = rcv.decode("utf-8")
                 self.receiver_queue.put(str_rcv, timeout=3)
-            except (IOError, queue.Full, UnicodeDecodeError):
+            except (IOError, queue.Full, UnicodeDecodeError, OSError):
                 self.logger.warning("arduino read error")
                 self.connect()
             # time.sleep(0.01)  
@@ -177,9 +188,11 @@ class DeskHandler:
         while(True):
             mess = self.arduino.receiver_queue.get()
             try:
-                self.rcv_callbacks[mess]()
+                
+                if not mess.strip().isnumeric():
+                    self.rcv_callbacks[mess]()
             except KeyError:
-                self.logger.warn("No handler for message %s", mess)
+                self.logger.info("No handler for message %s", mess)
 
 
     def invoke(self, cmd, payload = None):
@@ -353,10 +366,14 @@ class Parser(AbstractParser):
             # print(self.headphones)
             if self.headphones == 1:
                 move_audio_sinks(laptop_audio_id)
+                os.system('notify-send "moving to built-in audio"')
+                os.system(f"pactl set-default-sink {laptop_audio_id}")
                 # os.system('/home/karolh/Desktop/skrypty/makra/movesinks.sh ' + sink1)
                 self.headphones = 0
             else:
                 move_audio_sinks(headphone_audio_id)
+                os.system('notify-send "moving to headphones audio"')
+                os.system(f"pactl set-default-sink {headphone_audio_id}")
                 # os.system('/home/karolh/Desktop/skrypty/makra/movesinks.sh ' + sink2)
                 self.headphones = 1
         self.actions_dict['KEY_KPDOT'] = kp_dot
@@ -424,18 +441,44 @@ def __tests():
     desk.unmute()
     desk.notify()
 
+
+
+def find_keypad():
+    devices_lines = os.popen("cat /proc/bus/input/devices").read().split("\n")
+    for i, line in enumerate(devices_lines):
+        if line.endswith("Keypad\""):
+            return(devices_lines[i+4].split()[-1])
+
 if __name__ == "__main__":
+    logger = logging.getLogger(__name__)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logging.WARNING)
+    log_file_handler = logging.FileHandler("makra/logs.log")
+    log_file_handler.setLevel(logging.ERROR)
+    formatter = logging.Formatter('%(asctime)s:%(name)s:%(levelname)s: %(message)s')
+    stream_handler.setFormatter(formatter)
+    log_file_handler.setFormatter(formatter)
+    logging.basicConfig(handlers=[stream_handler, log_file_handler], force=True)
+
     
-    dev = InputDevice(sys.argv[1])
-    sink1 = sys.argv[2]
-    sink2 = sys.argv[3]
-    dev.grab()
+
+
 
     #parser = HomeParser()
     parser = Parser(True)
+    #TODO its just a workaround
+    while True:
 
-    for event in dev.read_loop():
-        if event.type == ecodes.EV_KEY:
-            key = categorize(event)
-            parser.parse(key)
+        dev = InputDevice("/dev/input/" + find_keypad())
+        dev.grab()
+
+        try:
+            for event in dev.read_loop():
+                if event.type == ecodes.EV_KEY:
+                    key = categorize(event)
+                    parser.parse(key)
+        except OSError:
+            logger.warning("event dev loop broken")
+            logger.warning("retry in 2s")
+            time.sleep(2)
 
