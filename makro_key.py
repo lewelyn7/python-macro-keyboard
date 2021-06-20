@@ -252,6 +252,8 @@ class Parser(AbstractParser):
     def __init__(self, ardu):
         super().__init__()
         
+        self.logger.setLevel(logging.DEBUG)
+
         # initial state
         self.desk = DeskHandler()
         self.muted = True
@@ -262,19 +264,7 @@ class Parser(AbstractParser):
         self.backspace_pressed = False
 
         #get availbile audio outputs
-        sinks = os.popen("pactl list short sinks").read()
-        sinks = sinks.split('\n')
-        sinks = [ids.split() for ids in sinks]
-        headphone_audio_id = 0
-        laptop_audio_id = 0
-        if 'usb' in sinks[0][1]:
-            headphone_audio_id = sinks[0][0]
-            laptop_audio_id = sinks[1][0]
-        else:
-            headphone_audio_id = sinks[1][0]
-            laptop_audio_id = sinks[0][0]
-        logging.debug(f"headphone audio sink {headphone_audio_id}")
-        logging.debug(f"laptop audio sink {laptop_audio_id}")
+        self._sync_audio_outputs()
 
         #get microphone state
         captureMicStr = os.popen('amixer | grep "Capture.*\[off\]"').read()
@@ -354,27 +344,14 @@ class Parser(AbstractParser):
                       self.discord_muted = True
         self.actions_dict['KEY_KP0'] = key_kp0
         
-        def move_audio_sinks(dest_audio_sink):
-            streams = os.popen("pactl list short sink-inputs").read()
-            streams = streams.split('\n')
-            streams = [stream.split() for stream in streams][:-1]
-            streams = filter(lambda s: (s[1] == headphone_audio_id or s[1] == laptop_audio_id), streams)
-            for stream in streams:
-                os.system(f"pactl move-sink-input {stream[0]} {dest_audio_sink}")
 
         def kp_dot(key):
             # print(self.headphones)
             if self.headphones == 1:
-                move_audio_sinks(laptop_audio_id)
-                os.system('notify-send "moving to built-in audio"')
-                os.system(f"pactl set-default-sink {laptop_audio_id}")
-                # os.system('/home/karolh/Desktop/skrypty/makra/movesinks.sh ' + sink1)
+                self._set_laptop_audio()
                 self.headphones = 0
             else:
-                move_audio_sinks(headphone_audio_id)
-                os.system('notify-send "moving to headphones audio"')
-                os.system(f"pactl set-default-sink {headphone_audio_id}")
-                # os.system('/home/karolh/Desktop/skrypty/makra/movesinks.sh ' + sink2)
+                self._set_headphone_audio()
                 self.headphones = 1
         self.actions_dict['KEY_KPDOT'] = kp_dot
         
@@ -428,6 +405,51 @@ class Parser(AbstractParser):
                   os.system("xdotool key ctrl+Super_L+F3")    
         self.actions_dict['KEY_KPASTERISK'] = kpasterisk
 
+    def _sync_audio_outputs(self):
+        #get availbile audio outputs
+        sinks = os.popen("pactl list short sinks").read()
+        sinks = sinks.split('\n')
+        sinks = [ids.split() for ids in sinks]
+        headphone_audio_id = 0
+        laptop_audio_id = 0
+        if 'usb' in sinks[0][1]:
+            headphone_audio_id = sinks[0][0]
+            laptop_audio_id = sinks[1][0]
+        else:
+            headphone_audio_id = sinks[1][0]
+            laptop_audio_id = sinks[0][0]
+
+        self.logger.debug(f"headphone audio sink {headphone_audio_id}")
+        self.logger.debug(f"laptop audio sink {laptop_audio_id}")
+        self.headphone_audio_id = headphone_audio_id
+        self.laptop_audio_id = laptop_audio_id
+    def _set_laptop_audio(self):
+        self._move_audio_sinks(self.laptop_audio_id)
+        os.system('notify-send "moving to built-in audio"')
+        self._set_audio(self.laptop_audio_id)
+
+    def _set_headphone_audio(self):
+        self._move_audio_sinks(self.headphone_audio_id)
+        os.system('notify-send "moving to built-in audio"')
+        self._set_audio(self.headphone_audio_id)
+
+    def _set_audio(self, num):
+        resp = os.popen(f"pactl set-default-sink {num}").read()
+        if resp.startswith("Failure"):
+            self.logger.debug("failure redetecting usb devices")
+            self._sync_audio_outputs()
+            resp = os.popen(f"pactl set-default-sink {num}").read()
+            if resp.startswith("Failure"):
+                self.logger.warning("couldnt switch audio devices")
+
+    def _move_audio_sinks(self, dest_audio_sink):
+        streams = os.popen("pactl list short sink-inputs").read()
+        streams = streams.split('\n')
+        streams = [stream.split() for stream in streams][:-1]
+        streams = filter(lambda s: (s[1] == self.headphone_audio_id or s[1] == self.laptop_audio_id), streams)
+        for stream in streams:
+            os.system(f"pactl move-sink-input {stream[0]} {dest_audio_sink}")
+
 
 class HomeParser(Parser):
     def __init__(self):
@@ -461,8 +483,6 @@ if __name__ == "__main__":
     logging.basicConfig(handlers=[stream_handler, log_file_handler], force=True)
 
     
-
-
 
     #parser = HomeParser()
     parser = Parser(True)
