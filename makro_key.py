@@ -13,11 +13,14 @@ from datetime import datetime
 from pydbus import SystemBus
 from gi.repository import GLib
 
+from unittest.mock import Mock
+
 
 
 
 
 class ArduinoModule:
+    
     def __init__(self, enable=True):
         self.logger = logging.getLogger(__name__).getChild("arduino_module")
         self.logger.setLevel(logging.WARNING)
@@ -129,6 +132,7 @@ class DeskHandler:
     def __init__(self):
         self.logger = logging.getLogger(__name__ + ".DeskHandler")
         self.logger.setLevel(logging.WARNING)        
+
 
         self.arduino = ArduinoModule()
         self.arduino.send_str("init\n")
@@ -255,7 +259,8 @@ class Parser(AbstractParser):
         self.logger.setLevel(logging.DEBUG)
 
         # initial state
-        self.desk = DeskHandler()
+        # self.desk = DeskHandler()
+        self.desk = Mock(spec=DeskHandler)
         self.muted = True
         self.unmuted = False
         self.discord_muted = True
@@ -264,7 +269,7 @@ class Parser(AbstractParser):
         self.backspace_pressed = False
 
         #get availbile audio outputs
-        self._sync_audio_outputs()
+        #self._sync_audio_outputs()
 
         #get microphone state
         captureMicStr = os.popen('amixer | grep "Capture.*\[off\]"').read()
