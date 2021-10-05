@@ -2,211 +2,22 @@
 # key.state = key_hold | key_down | key_up
 import os
 import sys
-from serial import Serial, SerialException
 from evdev import InputDevice, categorize, ecodes
 import queue
 import logging
-import logging.config
-import threading
 import time
+import logging.config
 from datetime import datetime
-from pydbus import SystemBus
-from gi.repository import GLib
-
+from desk_handler import DeskHandler
 from unittest.mock import Mock
+from audio_manager import AudioManager
 
 
 
 
 
-class ArduinoModule:
-    
-    def __init__(self, enable=True):
-        self.logger = logging.getLogger(__name__).getChild("arduino_module")
-        self.logger.setLevel(logging.WARNING)
-        self.enable = enable
-        self.connected = False
-
-        self.write_queue = queue.Queue()
-        self.send_executor_thread = threading.Thread(target=self.send_executor, daemon=True) 
-        self.receiver_thread = threading.Thread(target=self.receiver, daemon=True) 
-        # self.receiver_thread = threading.Thread(target=self.receive_executor, daemon=True) 
-        self.receiver_queue = queue.Queue(16)
-        
-        self.send_q_empty_cond = threading.Condition()
-        self.connected_cond = threading.Condition()
-        self.arduino_lock = threading.Lock()
-        
-        self.PRECOMMAND = 0
-        self.DESK_READY = 1
-        self.POSTCOMMAND = 3
-        self.MAX_SEND_ATTEMPTS = 15
-        self.rcv_buffer = []
-
-        self.send_executor_thread.start()
-        self.receiver_thread.start()
-
-        if(self.enable):
-            self.connect()
-    def connect(self):
-        self.connected = False
-        attempt_counter = 0
-        while not self.connected:
-            try:
-                self.arduino = Serial("/dev/ttyUSB0", 115200, timeout=60)
-                self.logger.info("Arduino connected")
-                self.connected = True
-            except SerialException:
-                try:
-                    self.arduino = Serial("/dev/ttyUSB1", 115200, timeout=60)
-                    self.logger.info("Arduino connected")
-                    self.connected = True
-                except SerialException:
-                    self.logger.warning("serial exception")
-                    self.connected = False
-                    self.logger.warning(f"retrying in 3 seconds")
-                    time.sleep(3)
-            except (OSError, FileNotFoundError) as e:
-                self.logger.error(f"OS ERROR {repr(e)}")
-                self.logger.error(f"retrying in 3 seconds")
-                time.sleep(3)
-            finally:
-                attempt_counter += 1
-        if(self.connected):
-            self.connected_cond.acquire()
-            self.connected_cond.notify_all()
-            self.connected_cond.release()
-    def send_str(self, message):
-        self.logger.info("sending " + message)
-        if not self.enable:
-            return False
-        if not self.connected:
-            self.connect()
-            if(not self.connected):
-                return False
-        self.send_q_empty_cond.acquire()
-        self.write_queue.put(message)
-        self.send_q_empty_cond.notify()
-        self.send_q_empty_cond.release()
 
 
-    def send_executor(self):
-        while(True):
-            self.send_q_empty_cond.acquire()
-            self.send_q_empty_cond.wait_for(lambda : (not self.write_queue.empty()) and self.enable and self.connected)
-            message = self.write_queue.get()
-            self.send_q_empty_cond.release()
-            
-            send_attempts = 0
-            for i in range(self.MAX_SEND_ATTEMPTS):
-                try:
-                    self.logger.info("writing " + message)
-                    self.arduino.write(message.encode("UTF-8"))
-                    break
-                except (IOError, OSError):
-                    self.logger.info("arduino write error")
-                    self.connect()
-
-
-    def receiver(self):
-        
-        while(True):
-            self.connected_cond.acquire()
-            self.connected_cond.wait_for(lambda : self.connected ==  True)
-            self.connected_cond.release()
-            try:
-                # if(self.arduino.inWaiting() > 0):
-                rcv = self.arduino.readline(64)
-                self.logger.debug("READ " + str(rcv))
-                str_rcv = rcv.decode("utf-8")
-                self.receiver_queue.put(str_rcv, timeout=3)
-            except (IOError, queue.Full, UnicodeDecodeError, OSError):
-                self.logger.warning("arduino read error")
-                self.connect()
-            # time.sleep(0.01)  
-
-
-class DeskHandler:
-
-
-    def __init__(self):
-        self.logger = logging.getLogger(__name__ + ".DeskHandler")
-        self.logger.setLevel(logging.WARNING)        
-
-
-        self.arduino = ArduinoModule()
-        self.arduino.send_str("init\n")
-
-
-        self.rcv_callbacks = {}
-        self.receiver_thread = threading.Thread(target=self.rcv_actions_handler, daemon=True) 
-        self.receiver_thread.start()
-
-
-        self.invoker_init()
-        self.dbus_init()
-
-    def invoker_init(self):
-        self.cmds = {}
-
-        def mute():
-            self.arduino.send_str('m\n')
-        self.cmds['mute'] = mute
-
-        def unmute():
-            self.arduino.send_str('u\n')
-        self.cmds['unmute'] = unmute
-
-        def notify():
-            self.arduino.send_str('n\n')
-        self.cmds['notify'] = notify
-
-        def mute_discord():
-            self.arduino.send_str('d\n')
-        self.cmds['mute_discord'] = mute_discord
-
-    def dbus_init(self):
-        def handler(val):
-            if val:
-                #bye bye
-                self.logger.info("bye bye")
-                self.arduino.send_str("tsleep\n")
-            else:
-                #hello
-                self.logger.info("wakeup")
-                self.arduino.send_str("wakeup\n")
-
-
-        loop = GLib.MainLoop()
-        bus = SystemBus()
-        objj = bus.get("org.freedesktop.login1", "/org/freedesktop/login1")
-        objj = objj['org.freedesktop.login1.Manager']
-        objj.onPrepareForSleep = handler
-        self.dbus_thread = threading.Thread(target=loop.run, daemon=True) 
-        self.dbus_thread.start()
-
-    def define_callback(self, message, foo):
-        self.rcv_callbacks[message] = foo
-
-    def rcv_actions_handler(self):
-        while(True):
-            mess = self.arduino.receiver_queue.get()
-            try:
-                
-                if not mess.strip().isnumeric():
-                    self.rcv_callbacks[mess]()
-            except KeyError:
-                self.logger.info("No handler for message %s", mess)
-
-
-    def invoke(self, cmd, payload = None):
-        try:
-            if payload:
-                self.cmds[cmd](payload)
-            else:
-                self.cmds[cmd]()
-        except KeyError:
-            self.logger.warn("there is no such command: %s", cmd)
 
 
 class AbstractParser:
@@ -259,8 +70,8 @@ class Parser(AbstractParser):
         self.logger.setLevel(logging.DEBUG)
 
         # initial state
-        # self.desk = DeskHandler()
-        self.desk = Mock(spec=DeskHandler)
+        self.desk = DeskHandler()
+        # self.desk = Mock(spec=DeskHandler)
         self.muted = True
         self.unmuted = False
         self.discord_muted = True
@@ -268,19 +79,9 @@ class Parser(AbstractParser):
         self.windows_max = False
         self.backspace_pressed = False
 
-        #get availbile audio outputs
-        #self._sync_audio_outputs()
 
-        #get microphone state
-        captureMicStr = os.popen('amixer | grep "Capture.*\[off\]"').read()
-        if(captureMicStr == ''):
-            self.desk.invoke('unmute')
-            self.unmuted = True
-            self.muted = False            
-        else:
-            self.desk.invoke('mute')
-            self.unmuted = False
-            self.muted = True            
+        self.audio_manager = AudioManager(self.desk)
+
         
         def key_backspace(key):
             if key.keystate == key.key_hold or key.keystate == key.key_down:
@@ -289,75 +90,44 @@ class Parser(AbstractParser):
                 self.backspace_pressed = False
         self.actions_dict['KEY_BACKSPACE'] = key_backspace
 
-        self.actions_dict['KEY_KP6'] = lambda key : os.system('xdotool key XF86AudioRaiseVolume')
-        self.actions_dict['KEY_KP4'] = lambda key : os.system('xdotool key XF86AudioLowerVolume')
-        self.actions_dict['KEY_KP5'] = lambda key : os.system('xdotool key XF86AudioMute')
+        self.actions_dict['KEY_KP6'] = lambda key : self.audio_manager.volume_up()
+        self.actions_dict['KEY_KP4'] = lambda key : self.audio_manager.volume_down()
+        self.actions_dict['KEY_KP5'] = lambda key : self.audio_manager.volume_toggle_mute()
         def key_kp1(key):
             if self.backspace_pressed:
                 os.system('kwriteconfig5 --file kscreenlockerrc  --group Daemon  --key Timeout {time};notify-send \"screen locking set to {time} min\"'.format(time=5))
             else:
-                os.system('xdotool key XF86AudioPrev')
+               self.audio_manager.audio_prev()
         self.actions_dict['KEY_KP1'] = key_kp1
         def key_kp2(key):
             if self.backspace_pressed:
                 os.system('kwriteconfig5 --file kscreenlockerrc  --group Daemon  --key Timeout {time};notify-send \"screen locking set to {time} min\"'.format(time=15))                
             else:
-                os.system('xdotool key XF86AudioPlay')
+                self.audio_manager.audio_play()
         self.actions_dict['KEY_KP2'] = key_kp2
         def key_kp3(key):
             if self.backspace_pressed:
                 os.system('kwriteconfig5 --file kscreenlockerrc  --group Daemon  --key Timeout {time};notify-send \"screen locking set to {time} min\"'.format(time=25))
             else:
-                os.system('xdotool key XF86AudioNext')
+                self.audio_manager.audio_next()
         self.actions_dict['KEY_KP3'] = key_kp3
         
         def key_kp0(key):
+            os.system("xdotool key Shift+Page_Up")
+            state = None
             if self.backspace_pressed:
-                if self.discord_muted:
-                    os.system('xdotool key alt alt+shift+Home')
-                    self.desk.invoke('unmute')
-                    self.discord_muted = False
-                    if self.muted:
-                        self.desk.invoke('unmute')
-                        self.unmuted = True
-                        
-                        self.muted = False
-                        os.system("amixer set Capture cap")                    
-                else:
-                    self.discord_muted = True
-                    os.system('xdotool key alt alt+shift+Home')
-                    self.desk.invoke('mute_discord')
+                state = self.audio_manager.toggle_mic_mute()
             else:
-              
-              if self.muted:
-                  self.desk.invoke('unmute')
-                  self.unmuted = True
-                  
-                  self.muted = False
-                  os.system("amixer set Capture cap")
-                  if self.discord_muted:
-                      os.system('xdotool key alt alt+shift+Home')
-                      self.discord_muted = False
-              elif self.unmuted:
-                  self.desk.invoke('mute')
-                  self.unmuted = False
-                  
-                  self.muted = True
-                  os.system("amixer set Capture nocap")
-                  if not self.discord_muted:
-                      os.system('xdotool key alt alt+shift+Home')
-                      self.discord_muted = True
+                state = self.audio_manager.toggle_mic_mute()
+            if state == True:
+                self.desk.invoke("mute")
+            else:
+                self.desk.invoke("unmute")
         self.actions_dict['KEY_KP0'] = key_kp0
         
 
         def kp_dot(key):
-            # print(self.headphones)
-            if self.headphones == 1:
-                self._set_laptop_audio()
-                self.headphones = 0
-            else:
-                self._set_headphone_audio()
-                self.headphones = 1
+            self.audio_manager.toggle_audio_output()
         self.actions_dict['KEY_KPDOT'] = kp_dot
         
         def kp_minus(key):
@@ -410,50 +180,7 @@ class Parser(AbstractParser):
                   os.system("xdotool key ctrl+Super_L+F3")    
         self.actions_dict['KEY_KPASTERISK'] = kpasterisk
 
-    def _sync_audio_outputs(self):
-        #get availbile audio outputs
-        sinks = os.popen("pactl list short sinks").read()
-        sinks = sinks.split('\n')
-        sinks = [ids.split() for ids in sinks]
-        headphone_audio_id = 0
-        laptop_audio_id = 0
-        if 'usb' in sinks[0][1]:
-            headphone_audio_id = sinks[0][0]
-            laptop_audio_id = sinks[1][0]
-        else:
-            headphone_audio_id = sinks[1][0]
-            laptop_audio_id = sinks[0][0]
 
-        self.logger.debug(f"headphone audio sink {headphone_audio_id}")
-        self.logger.debug(f"laptop audio sink {laptop_audio_id}")
-        self.headphone_audio_id = headphone_audio_id
-        self.laptop_audio_id = laptop_audio_id
-    def _set_laptop_audio(self):
-        self._move_audio_sinks(self.laptop_audio_id)
-        os.system('notify-send "moving to built-in audio"')
-        self._set_audio(self.laptop_audio_id)
-
-    def _set_headphone_audio(self):
-        self._move_audio_sinks(self.headphone_audio_id)
-        os.system('notify-send "moving to built-in audio"')
-        self._set_audio(self.headphone_audio_id)
-
-    def _set_audio(self, num):
-        resp = os.popen(f"pactl set-default-sink {num}").read()
-        if resp.startswith("Failure"):
-            self.logger.debug("failure redetecting usb devices")
-            self._sync_audio_outputs()
-            resp = os.popen(f"pactl set-default-sink {num}").read()
-            if resp.startswith("Failure"):
-                self.logger.warning("couldnt switch audio devices")
-
-    def _move_audio_sinks(self, dest_audio_sink):
-        streams = os.popen("pactl list short sink-inputs").read()
-        streams = streams.split('\n')
-        streams = [stream.split() for stream in streams][:-1]
-        streams = filter(lambda s: (s[1] == self.headphone_audio_id or s[1] == self.laptop_audio_id), streams)
-        for stream in streams:
-            os.system(f"pactl move-sink-input {stream[0]} {dest_audio_sink}")
 
 
 class HomeParser(Parser):
@@ -471,10 +198,14 @@ def __tests():
 
 
 def find_keypad():
-    devices_lines = os.popen("cat /proc/bus/input/devices").read().split("\n")
-    for i, line in enumerate(devices_lines):
-        if line.endswith("Keypad\""):
-            return(devices_lines[i+4].split()[-1])
+    for i in range(5):
+        devices_lines = os.popen("cat /proc/bus/input/devices").read().split("\n")
+        for i, line in enumerate(devices_lines):
+            if line.endswith("Keypad\""):
+                return(devices_lines[i+4].split()[-1])
+        
+        time.sleep(3)
+
 
 if __name__ == "__main__":
     logger = logging.getLogger(__name__)
