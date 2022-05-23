@@ -1,16 +1,30 @@
 import os
-
+import pulsectl
+import logging
 class AudioManager:
 
     mic_muted = False
     headphones = False
 
     def __init__(self, desk_handler):
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.DEBUG)
         self.desk_handler = desk_handler
         self.sync_microphone_state()
-        # self._sync_audio_outputs()
-        pass
+        self._sync_audio_outputs() #workaround
+        self._sync_audio_sink_inputs()
+        
 
+    def _sync_audio_sink_inputs(self):
+        self.pulse = pulsectl.Pulse("makro_keyboard")
+        self._update_audio_sink_inputs()
+
+    def _update_audio_sink_inputs(self):
+        self.sink_inputs = { i.name:i  for i in self.pulse.sink_input_list()}
+
+    def _set_sink_input_volume(self, name, volume):
+        self.pulse.sink_input_volume_set(self.sink_inputs[name].index, volume)
+        
     def sync_microphone_state(self):
         #get microphone state
         captureMicStr = os.popen('amixer | grep "Capture.*\[off\]"').read()
@@ -26,7 +40,7 @@ class AudioManager:
         sinks = [ids.split() for ids in sinks]
         headphone_audio_id = 0
         laptop_audio_id = 0
-        if 'usb' in sinks[0][1]:
+        if 'USB' in sinks[0][1]:
             headphone_audio_id = sinks[0][0]
             laptop_audio_id = sinks[1][0]
         else:
@@ -82,7 +96,7 @@ class AudioManager:
         os.system("amixer set Capture cap")
     
     def toggle_mic_mute(self):
-        os.system('xdotool key alt alt+shift+Home')
+        # os.system('xdotool key Shift_R+Control_R+y')
         if self.mic_muted:
             self.unmute_mic()
             return False

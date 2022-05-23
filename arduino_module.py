@@ -3,6 +3,8 @@ from serial import Serial, SerialException
 import queue
 import time
 import logging
+import traceback
+
 class ArduinoModule:
     
     def __init__(self, enable=True):
@@ -104,7 +106,8 @@ class ArduinoModule:
                 self.logger.debug("READ " + str(rcv))
                 str_rcv = rcv.decode("utf-8")
                 self.receiver_queue.put(str_rcv, timeout=3)
-            except (IOError, queue.Full, UnicodeDecodeError, OSError):
+            except (IOError, queue.Full, UnicodeDecodeError, OSError) as e:
+                traceback.print_exc()
                 self.logger.warning("arduino read error")
                 self.connect()
             # time.sleep(0.01)  

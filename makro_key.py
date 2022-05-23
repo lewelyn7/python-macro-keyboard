@@ -8,10 +8,11 @@ import logging
 import time
 import logging.config
 from datetime import datetime
+from MQTThandler import MQTThandler
 from desk_handler import DeskHandler
 from unittest.mock import Mock
 from audio_manager import AudioManager
-
+from MQTThandler import MQTThandler
 
 
 
@@ -78,6 +79,7 @@ class Parser(AbstractParser):
         self.headphones = False
         self.windows_max = False
         self.backspace_pressed = False
+        self.mqtt_handler = MQTThandler()
 
 
         self.audio_manager = AudioManager(self.desk)
@@ -113,7 +115,7 @@ class Parser(AbstractParser):
         self.actions_dict['KEY_KP3'] = key_kp3
         
         def key_kp0(key):
-            os.system("xdotool key Shift+Page_Up")
+            os.system('xdotool key alt+mu')
             state = None
             if self.backspace_pressed:
                 state = self.audio_manager.toggle_mic_mute()
@@ -121,8 +123,10 @@ class Parser(AbstractParser):
                 state = self.audio_manager.toggle_mic_mute()
             if state == True:
                 self.desk.invoke("mute")
+                self.mqtt_handler.send_mic_state(mute=True)
             else:
                 self.desk.invoke("unmute")
+                self.mqtt_handler.send_mic_state(mute=False)
         self.actions_dict['KEY_KP0'] = key_kp0
         
 
